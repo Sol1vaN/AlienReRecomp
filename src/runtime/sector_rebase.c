@@ -144,3 +144,61 @@ unsigned sector_rebase_align(uint32_t transfer) {
     }
     return changed;
 }
+
+/* The guest deletes and recreates type-245 doors when replacing the shared
+ * room. Their separately exported spawn positions differ by several units.
+ * Carry the already displayed closed pose across that replacement; keep the
+ * new door's identity, links, opening direction and animation state. */
+void sector_rebase_doors_capture(uint32_t transfer,SectorDoors *state) {
+    memset(state,0,sizeof *state);state->room=-1;
+    transfer&=0x1fffffff;uint32_t player=mem_r32(0xa49e8)&0x1fffffff;
+    if(!range(transfer,16) || !range(player,388))return;
+    int room=(int16_t)mem_r16(player+326);state->room=(int16_t)mem_r16(transfer+12);
+    for(unsigned i=0;i<96;i++) {
+        uint32_t o=0x10d1d0+388*i,data=mem_r32(o+100)&0x1fffffff;
+        if(mem_r8(o+384)!=1 || mem_r16(o+322)!=245 ||
+           (int16_t)mem_r16(o+326)!=room || !range(data,28) || mem_r16(data+6))continue;
+        SectorDoor *d=&state->door[state->count++];
+        for(unsigned k=0;k<3;k++) {
+            d->p[k]=(int32_t)((uint32_t)mem_r32(o+48+4*k)+mem_r32(transfer+4*k));
+            d->angle[k]=mem_r16(o+60+2*k)&4095;
+        }
+        d->model=mem_r32(o+44);d->kind=mem_r8(data+10);
+    }
+}
+unsigned sector_rebase_doors_restore(const SectorDoors *state) {
+    unsigned changed=0;
+    if(state->room<0 || state->count>96)return 0;
+    for(unsigned i=0;i<96;i++) {
+        uint32_t o=0x10d1d0+388*i,data=mem_r32(o+100)&0x1fffffff;
+        if(mem_r8(o+384)!=1 || mem_r16(o+322)!=245 ||
+           (int16_t)mem_r16(o+326)!=state->room || !range(data,28) || mem_r16(data+6))continue;
+        int found=-1;int64_t best=16LL*4096*16*4096;bool ambiguous=false;
+        for(unsigned j=0;j<state->count;j++) {
+            const SectorDoor *d=&state->door[j];bool same=d->model==mem_r32(o+44) && d->kind==mem_r8(data+10);
+            int64_t distance=0;
+            for(unsigned k=0;k<3;k++) {
+                unsigned angle=mem_r16(o+60+2*k)&4095;
+                bool equivalent=d->angle[k]==angle;
+                /* A closed upright type-245 door is symmetric under a half
+                 * turn. Adjacent sector exports face it toward opposite
+                 * portal sides. Match that same physical closed door while
+                 * retaining the new orientation for opening and room links. */
+                if(k==1 && d->angle[0]==0 && d->angle[2]==0 &&
+                   !(mem_r16(o+60)&4095) && !(mem_r16(o+64)&4095) &&
+                   ((d->angle[1]-angle)&4095)==2048)equivalent=true;
+                if(!equivalent)same=false;
+                int64_t diff=(int32_t)mem_r32(o+48+4*k)-(int64_t)d->p[k];
+                if(llabs(diff)>16*4096){same=false;break;}
+                distance+=diff*diff;
+            }
+            if(!same)continue;
+            if(distance<best){best=distance;found=(int)j;ambiguous=false;}
+            else if(distance==best)ambiguous=true;
+        }
+        if(found<0 || ambiguous)continue;
+        for(unsigned k=0;k<3;k++)mem_w32(o+48+4*k,(uint32_t)state->door[found].p[k]);
+        changed++;
+    }
+    return changed;
+}

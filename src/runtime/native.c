@@ -724,6 +724,11 @@ void ALIEN_80080FE4(CPU *c) {
 
 void ALIEN_80075850__orig(CPU *c);
 void ALIEN_80075850(CPU *c) {
-    if((c->r[31]&0x1fffffff)==0x75cfc)sector_rebase_align(c->r[4]);
+    bool transfer=(c->r[31]&0x1fffffff)==0x75cfc;SectorDoors doors;
+    if(transfer) {
+        sector_rebase_doors_capture(c->r[4],&doors);
+        sector_rebase_align(c->r[4]);
+    }
     ALIEN_80075850__orig(c);
+    if(transfer)sector_rebase_doors_restore(&doors);
 }
