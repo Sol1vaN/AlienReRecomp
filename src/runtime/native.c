@@ -121,7 +121,16 @@ void ALIEN_80030E68(CPU *c) {
     bool frame = (c->r[31] & 0x1FFFFFFFu) == FRAME_WAIT_RA && g_base_scale < NO_BOOST_SCALE;
     if (frame && g_frame_work_start >= 0)
         cpu_budget_frame_done(c->cycles - g_frame_work_start);
-    ALIEN_80030E68__orig(c);
+    /* The original callback fence waits on this same flag. Advance to the
+     * next hardware event instead of interpreting its idle load/branch loop. */
+    mem_w32(0x800A46E4u,1);
+    int64_t limit=c->cycles+30LL*PSX_NTSC_FRAME_CYCLES;
+    while(mem_r32(0x800A46E4u)==1) {
+        if(c->cycles>=limit) { LOGW("frame","vblank callback fence timed out");break; }
+        if(c->next_event>c->cycles)c->cycles=c->next_event;
+        cpu_service_events(c);
+    }
+    c->r[2]=mem_r32(0x800A46E4u);c->r[3]=1;
     g_frame_work_start = frame ? c->cycles : -1;
 }
 
